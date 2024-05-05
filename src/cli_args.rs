@@ -39,7 +39,7 @@ impl FromStr for Command {
 pub struct InputArgs {
     pub username: String,
     pub password: String,
-    pub folder: Option<String>,
+    pub folder: String,
     pub message_num: Option<u32>,
     pub tls: bool,
     pub command: Command,
@@ -166,7 +166,7 @@ impl InputArgsBuilder {
         Ok(InputArgs {
             username,
             password,
-            folder: self.folder.clone(),
+            folder: self.folder.unwrap_or("Inbox".to_string()),
             message_num: self.message_num,
             tls: self.tls.unwrap_or_default(),
             command,
