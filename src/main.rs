@@ -1,71 +1,43 @@
 use std::env;
-use std::io::{prelude::*, BufWriter};
-use std::io::{BufReader, Write};
-use std::net::TcpStream;
+use std::io::BufRead;
+use std::process::ExitCode;
 
-use crate::cli_args::Command;
+use crate::cli_args::{Args, Command};
 use crate::client::Client;
 
 pub mod cli_args;
 pub mod client;
 
-fn main() {
-    let args: Vec<String> = env::args().collect();
-    dbg!(args.clone());
-    let input_args = Client::try_from(args).expect("invalid args");
-    dbg!(&input_args);
+fn main() -> ExitCode {
+    let args = Args::try_from(env::args().collect::<Vec<String>>()).expect("invalid args");
 
-    let stream = TcpStream::connect((input_args.server_name.clone(), 143)).unwrap();
+    let mut client = match Client::connect(args.server_name) {
+        Ok(client) => client,
+        Err(_) => return ExitCode::from(1),
+    };
 
-    let mut reader = BufReader::new(stream.try_clone().unwrap());
-    let mut writer = BufWriter::new(stream);
+    if client.login(args.username, args.password).is_err() {
+        return ExitCode::from(3);
+    };
 
-    let mut line = String::new();
-    reader.read_line(&mut line).unwrap();
-    dbg!(&line);
+    if client.open_folder(args.folder).is_err() {
+        return ExitCode::from(3);
+    }
 
-    writer
-        .write(
-            format!(
-                "logintag LOGIN {} {}\r\n",
-                &input_args.username, &input_args.password
-            )
-            .as_bytes(),
-        )
-        .unwrap();
-    writer.flush().unwrap();
-
-    writer
-        .write(format!("ftag SELECT {}\r\n", &input_args.folder,).as_bytes())
-        .unwrap();
-    writer.flush().unwrap();
-
-    match input_args.command {
-        Command::Retrieve => {
-            writer
-                .write(
-                    format!("rtag FETCH {} BODY.PEEK[]\r\n", &input_args.message_num,).as_bytes(),
-                )
-                .unwrap();
-        }
+    if match args.command {
+        Command::Retrieve => client.retrieve(args.message_num),
         Command::Parse => todo!(),
         Command::Mime => todo!(),
         Command::List => todo!(),
     }
+    .is_err()
+    {
+        return ExitCode::from(3);
+    }
 
-
-    let mut line = String::new();
-    reader.read_line(&mut line).unwrap();
-    dbg!(&line);
-
-    let mut line = String::new();
-    reader.read_line(&mut line).unwrap();
-    dbg!(&line);
-    dbg!();
-    /*     let lines: Vec<String> = reader.lines().map(|l| l.unwrap()).collect();
-    println!("here");
-    println!("{:?}", lines); */
-    for line in reader.lines().map_while(Result::ok) {
+    for line in client.reader.lines().map_while(Result::ok) {
         dbg!(line);
     }
+
+    ExitCode::from(0)
 }

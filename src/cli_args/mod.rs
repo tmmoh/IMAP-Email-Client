@@ -1,10 +1,45 @@
 mod error;
 
 use std::str::FromStr;
-use crate::client::Client;
 
 pub use self::error::{Error, Result};
 
+#[derive(Debug)]
+pub struct Args {
+    pub username: String,
+    pub password: String,
+    pub folder: Option<String>,
+    pub message_num: Option<u32>,
+    pub tls: bool,
+    pub command: Command,
+    pub server_name: String,
+}
+
+impl TryFrom<Vec<String>> for Args {
+    type Error = Error;
+
+    fn try_from(mut args: Vec<String>) -> Result<Self> {
+        args.remove(0);
+        let mut args_iter = args.into_iter();
+        let mut args_builder = ArgsBuilder::default();
+
+        let mut next_arg = || args_iter.next().ok_or(Error::Missing);
+
+        args_builder = loop {
+            let arg = next_arg()?;
+            args_builder = match arg.as_str() {
+                "-u" => args_builder.username(next_arg()?)?,
+                "-p" => args_builder.password(next_arg()?)?,
+                "-f" => args_builder.folder(next_arg()?)?,
+                "-n" => args_builder.message_num(next_arg()?.trim().parse()?)?,
+                "-t" => args_builder.tls(true)?,
+                _ => break args_builder.command(arg)?.server_name(next_arg()?)?,
+            };
+        };
+
+        args_builder.build()
+    }
+}
 
 #[derive(Debug)]
 pub enum Command {
@@ -28,9 +63,8 @@ impl FromStr for Command {
     }
 }
 
-
 #[derive(Default)]
-pub struct ClientBuilder {
+pub struct ArgsBuilder {
     username: Option<String>,
     password: Option<String>,
     folder: Option<String>,
@@ -40,7 +74,7 @@ pub struct ClientBuilder {
     server_name: Option<String>,
 }
 
-impl ClientBuilder {
+impl ArgsBuilder {
     pub fn username(mut self, username: impl Into<String>) -> Result<Self> {
         if self.username.is_some() {
             Err(Error::Duplicate)
@@ -106,7 +140,7 @@ impl ClientBuilder {
         }
     }
 
-    pub fn build(self) -> Result<Client> {
+    pub fn build(self) -> Result<Args> {
         let Some(username) = self.username else {
             return Err(Error::Missing);
         };
@@ -120,11 +154,11 @@ impl ClientBuilder {
             return Err(Error::Missing);
         };
 
-        Ok(Client {
+        Ok(Args {
             username,
             password,
-            folder: self.folder.unwrap_or("Inbox".to_string()),
-            message_num: self.message_num.map_or("*".to_string(), |n| n.to_string()),
+            folder: self.folder,
+            message_num: self.message_num,
             tls: self.tls.unwrap_or_default(),
             command,
             server_name,
