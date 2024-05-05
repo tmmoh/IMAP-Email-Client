@@ -1,6 +1,5 @@
 use std::{num::ParseIntError, str::FromStr};
 
-
 #[derive(Debug)]
 pub enum ArgParseError {
     Missing,
@@ -15,7 +14,7 @@ impl From<ParseIntError> for ArgParseError {
 }
 
 #[derive(Debug)]
-enum Command {
+pub enum Command {
     Retrieve,
     Parse,
     Mime,
@@ -38,13 +37,13 @@ impl FromStr for Command {
 
 #[derive(Debug)]
 pub struct InputArgs {
-    username: String,
-    password: String,
-    folder: Option<String>,
-    message_num: Option<u32>,
-    tls: bool,
-    command: Command,
-    server_name: String,
+    pub username: String,
+    pub password: String,
+    pub folder: Option<String>,
+    pub message_num: Option<u32>,
+    pub tls: bool,
+    pub command: Command,
+    pub server_name: String,
 }
 
 impl TryFrom<Vec<String>> for InputArgs {
