@@ -30,7 +30,7 @@ Authentication-Results: spf=fail (sender IP is 103.96.20.101)
  header.from=edstem.org;compauth=softpass reason=202
 Received-SPF: Fail (protection.outlook.com: domain of bounce.au.edstem.org
  does not designate 103.96.20.101 as permitted sender)
- receiver=protection.outlook.com; Argent-ip=103.96.20.101;
+ receiver=protection.outlook.com; client-ip=103.96.20.101;
  helo=au-smtp-inbound-delivery-1.mimecast.com
 Received: from au-smtp-inbound-delivery-1.mimecast.com (103.96.20.101) by
  ME3AUS01FT019.mail.protection.outlook.com (10.114.155.186) with Microsoft
@@ -242,7 +242,7 @@ te
 
     if (rp =3D=3D NULL) {
 
-        fprintf(stderr, "Argent: failed to connect\n");
+        fprintf(stderr, "client: failed to connect\n");
 
         exit(EXIT_FAILURE);
 
@@ -351,7 +351,7 @@ rotocol);
         close(sockfd);
     }
     if (rp =3D=3D NULL) {
-        fprintf(stderr, &quot;Argent: failed to connect\n&quot;);
+        fprintf(stderr, &quot;client: failed to connect\n&quot;);
         exit(EXIT_FAILURE);
     }
     freeaddrinfo(servinfo);
@@ -607,7 +607,7 @@ rotocol);
     if (rp =3D=3D NULL) {
 <br>
 
-        fprintf(stderr, &quot;Argent: failed to connect\n&quot;);
+        fprintf(stderr, &quot;client: failed to connect\n&quot;);
 <br>
 
         exit(EXIT_FAILURE);

@@ -13,7 +13,7 @@ X-Spam-Status: No, score=-0.1 required=5.0 tests=DKIMWL_WL_MED,DKIM_SIGNED,
 	autolearn=unavailable autolearn_force=no version=3.4.6
 Received: from b235-186.smtp-out.ap-southeast-2.amazonses.com (b235-186.smtp-out.ap-southeast-2.amazonses.com [69.169.235.186])
 	(using TLSv1.2 with cipher ECDHE-RSA-AES256-GCM-SHA384 (256/256 bits))
-	(Argent did not present a certificate)
+	(Client did not present a certificate)
 	by comp30023 (Postfix) with ESMTPS id 23BBF6002B
 	for <staff@comp30023>; Mon, 22 Apr 2024 23:44:13 +0000 (UTC)
 Authentication-Results: mail.comp30023; dmarc=fail (p=quarantine dis=none) header.from=instructure.com

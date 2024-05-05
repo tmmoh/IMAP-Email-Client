@@ -18,8 +18,8 @@ impl Client {
     const FOLDER_TAG: &'static str = "ftag";
     const RETRIEVE_TAG: &'static str = "rtag";
 
-    pub fn connect(server_name: impl Into<String>) -> Result<Self> {
-        let stream = TcpStream::connect((server_name.into().clone(), 143))?;
+    pub fn connect(server_name: &str) -> Result<Self> {
+        let stream = TcpStream::connect((server_name, 143))?;
         Ok(Self {
             reader: BufReader::new(stream.try_clone()?),
             writer: BufWriter::new(stream),
@@ -27,7 +27,7 @@ impl Client {
     }
 
     fn send_command(&mut self, tag: &str, command: &str, args: &[&str]) -> Result<()> {
-        let message = [&[tag, command], args, &["\r\n"]].concat().join(" ");
+        let message = dbg!([&[tag, command], args, &["\r\n"]].concat().join(" "));
         let to_write = message.as_bytes();
         let written = self.writer.write(to_write)?;
 
@@ -56,7 +56,7 @@ impl Client {
     }
 
     pub fn login(&mut self, username: &str, password: &str) -> Result<()> {
-        self.send_command(Self::LOGIN_TAG, "LOGIN", &[username, password])?;
+        self.send_command(Self::LOGIN_TAG, "LOGIN", &[&into_literal(username), &into_literal(password)])?;
         let line = dbg!(self.read_until_tag(Self::LOGIN_TAG)?);
 
         if !line.to_lowercase().starts_with(&[Self::LOGIN_TAG, "ok"].join(" ")) {
@@ -69,7 +69,7 @@ impl Client {
     pub fn open_folder(&mut self, folder: Option<&str>) -> Result<()> {
         let folder = folder.unwrap_or("Inbox");
 
-        self.send_command(Self::FOLDER_TAG, "SELECT", &[folder])?;
+        self.send_command(Self::FOLDER_TAG, "SELECT", &[&into_literal(folder)])?;
         let line = dbg!(self.read_until_tag(Self::FOLDER_TAG)?);
 
         if !line.to_lowercase().starts_with(&[Self::FOLDER_TAG, "ok"].join(" ")) {
@@ -96,8 +96,12 @@ impl Client {
 
         let mut buf = vec![b'\0'; to_read];
         self.reader.read_exact(&mut buf)?;
-        println!("{}", String::from_utf8(buf).unwrap());
+        print!("{}", String::from_utf8(buf).unwrap());
 
         Ok(())
     }
+}
+
+fn into_literal(str: &str) -> String {
+    dbg!(format!("{{{}}}\r\n{}", str.len(), str))
 }

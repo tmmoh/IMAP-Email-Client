@@ -98,7 +98,7 @@ te
 
     if (rp =3D=3D NULL) {
 
-        fprintf(stderr, "Argent: failed to connect\n");
+        fprintf(stderr, "client: failed to connect\n");
 
         exit(EXIT_FAILURE);
 
