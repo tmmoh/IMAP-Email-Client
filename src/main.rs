@@ -1,5 +1,4 @@
 use std::env;
-use std::io::BufRead;
 use std::process::ExitCode;
 
 use crate::cli_args::{Args, Command};
@@ -16,11 +15,12 @@ fn main() -> ExitCode {
         Err(_) => return ExitCode::from(1),
     };
 
-    if client.login(args.username, args.password).is_err() {
+    if client.login(&args.username, &args.password).is_err() {
+        println!("Login failure");
         return ExitCode::from(3);
     };
 
-    if client.open_folder(args.folder).is_err() {
+    if client.open_folder(args.folder.as_deref()).is_err() {
         return ExitCode::from(3);
     }
 
@@ -33,10 +33,6 @@ fn main() -> ExitCode {
     .is_err()
     {
         return ExitCode::from(3);
-    }
-
-    for line in client.reader.lines().map_while(Result::ok) {
-        dbg!(line);
     }
 
     ExitCode::from(0)

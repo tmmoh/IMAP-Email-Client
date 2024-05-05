@@ -14,6 +14,10 @@ pub struct Client {
 }
 
 impl Client {
+    const LOGIN_TAG: &'static str = "logtag";
+    const FOLDER_TAG: &'static str = "ftag";
+    const RETRIEVE_TAG: &'static str = "rtag";
+
     pub fn connect(server_name: impl Into<String>) -> Result<Self> {
         let stream = TcpStream::connect((server_name.into().clone(), 143))?;
         Ok(Self {
@@ -22,15 +26,12 @@ impl Client {
         })
     }
 
-    pub fn login(
-        &mut self,
-        username: impl Into<String>,
-        password: impl Into<String>,
-    ) -> Result<()> {
-        let to_write = format!("logintag LOGIN {} {}\r\n", username.into(), password.into());
-        let written = self.writer.write(to_write.as_bytes())?;
+    fn send_command(&mut self, tag: &str, command: &str, args: &[&str]) -> Result<()> {
+        let message = [&[tag, command], args, &["\r\n"]].concat().join(" ");
+        let to_write = message.as_bytes();
+        let written = self.writer.write(to_write)?;
 
-        if written != to_write.as_bytes().len() {
+        if written != to_write.len() {
             return Err(Error::MissingWrite);
         };
 
@@ -39,20 +40,41 @@ impl Client {
         Ok(())
     }
 
-    pub fn open_folder(&mut self, folder: Option<impl Into<String>>) -> Result<()> {
-        let folder = match folder {
-            Some(folder) => folder.into(),
-            None => "Inbox".to_string(),
-        };
+    fn read_until_tag(&mut self, tag: &str) -> Result<String> {
+        let mut buf = String::new();
+        loop {
+            buf.clear();
+            let read = self.reader.read_line(&mut buf)?;
+            if read != buf.len() {
+                return Err(Error::MissingRead);
+            }
 
-        let to_write = format!("ftag SELECT {}\r\n", folder);
-        let written = self.writer.write(to_write.as_bytes())?;
+            if buf.starts_with(tag) {
+                return Ok(buf);
+            }
+        }
+    }
 
-        if written != to_write.as_bytes().len() {
-            return Err(Error::MissingWrite);
-        };
+    pub fn login(&mut self, username: &str, password: &str) -> Result<()> {
+        self.send_command(Self::LOGIN_TAG, "LOGIN", &[username, password])?;
+        let line = dbg!(self.read_until_tag(Self::LOGIN_TAG)?);
 
-        self.writer.flush()?;
+        if !line.to_lowercase().starts_with(&[Self::LOGIN_TAG, "ok"].join(" ")) {
+            return Err(Error::LoginFailed);
+        }
+
+        Ok(())
+    }
+
+    pub fn open_folder(&mut self, folder: Option<&str>) -> Result<()> {
+        let folder = folder.unwrap_or("Inbox");
+
+        self.send_command(Self::FOLDER_TAG, "SELECT", &[folder])?;
+        let line = dbg!(self.read_until_tag(Self::FOLDER_TAG)?);
+
+        if !line.to_lowercase().starts_with(&[Self::FOLDER_TAG, "ok"].join(" ")) {
+            return Err(Error::LoginFailed);
+        }
 
         Ok(())
     }
@@ -62,15 +84,19 @@ impl Client {
             Some(n) => n.to_string(),
             None => "*".to_string(),
         };
+        let n = n.as_str();
 
-        let to_write = format!("rtag FETCH {} BODY.PEEK[]\r\n", n);
-        let written = self.writer.write(to_write.as_bytes())?;
+        self.send_command(Self::RETRIEVE_TAG, "FETCH", &[n, "BODY.PEEK[]"])?;
+        let line = dbg!(self.read_until_tag(&["*", n, "FETCH"].join(" "))?);
 
-        if written != to_write.as_bytes().len() {
-            return Err(Error::MissingWrite);
-        };
+        let start = line.find("{").expect("Line should always have number of octets");
+        let end = line.find("}").expect("Line should always have number of octets");
+        let to_read = line[start+1..end].parse::<usize>().unwrap();
+        dbg!(to_read);
 
-        self.writer.flush()?;
+        let mut buf = vec![b'\0'; to_read];
+        self.reader.read_exact(&mut buf)?;
+        println!("{}", String::from_utf8(buf).unwrap());
 
         Ok(())
     }
