@@ -7,6 +7,7 @@ pub enum Error {
     MissingRead,
     MissingWrite,
     LoginFailed,
+    MessageNotFound,
 }
 
 impl From<io::Error> for Error {

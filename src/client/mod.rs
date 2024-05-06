@@ -26,7 +26,7 @@ impl Client {
         })
     }
 
-    fn send_command(&mut self, tag: &str, command: &str, args: &[&str]) -> Result<()> {
+    fn send_command(&mut self, tag: &str, command: &str, args: &[&str]) -> Result<Vec<String>> {
         let message = dbg!([&[tag, command], args, &["\r\n"]].concat().join(" "));
         let to_write = message.as_bytes();
         let written = self.writer.write(to_write)?;
@@ -37,29 +37,59 @@ impl Client {
 
         self.writer.flush()?;
 
-        Ok(())
+        self.read_until_tag(tag)
     }
 
-    fn read_until_tag(&mut self, tag: &str) -> Result<String> {
-        let mut buf = String::new();
+    fn read_until_tag(&mut self, tag: &str) -> Result<Vec<String>> {
+        let mut responses: Vec<String> = Vec::new();
+        let mut res = String::new();
         loop {
-            buf.clear();
-            let read = self.reader.read_line(&mut buf)?;
-            if read != buf.len() {
+            res.clear();
+            let read = self.reader.read_line(&mut res)?;
+            // Check missing read
+            if read != res.len() {
                 return Err(Error::MissingRead);
             }
 
-            if buf.starts_with(tag) {
-                return Ok(buf);
+            // Check untagged lines
+            if res.starts_with("*") {
+                if res.contains("}\r\n") {
+                    // Check for literal
+                    let start = res
+                        .find("{")
+                        .expect("Line should always have number of octets");
+                    let end = res
+                        .find("}")
+                        .expect("Line should always have number of octets");
+                    let to_read = res[start + 1..end].parse::<usize>().unwrap();
+                    dbg!(to_read);
+
+                    let mut literal = vec![b'\0'; to_read];
+                    self.reader.read_exact(&mut literal)?;
+                    res.push_str(std::str::from_utf8(&literal).expect("should be valid utf-8"));
+                }
+                responses.push(res.clone());
+            } else if res.starts_with(tag) {
+                responses.push(res);
+                return Ok(responses);
             }
         }
     }
 
     pub fn login(&mut self, username: &str, password: &str) -> Result<()> {
-        self.send_command(Self::LOGIN_TAG, "LOGIN", &[&into_literal(username), &into_literal(password)])?;
-        let line = dbg!(self.read_until_tag(Self::LOGIN_TAG)?);
+        let responses = self.send_command(
+            Self::LOGIN_TAG,
+            "LOGIN",
+            &[&into_literal(username), &into_literal(password)]
+        )?;
+        let tagged_res = responses
+            .last()
+            .expect("responses is always at least one long");
 
-        if !line.to_lowercase().starts_with(&[Self::LOGIN_TAG, "ok"].join(" ")) {
+        if !tagged_res
+            .to_lowercase()
+            .starts_with(&[Self::LOGIN_TAG, "ok"].join(" "))
+        {
             return Err(Error::LoginFailed);
         }
 
@@ -69,10 +99,16 @@ impl Client {
     pub fn open_folder(&mut self, folder: Option<&str>) -> Result<()> {
         let folder = folder.unwrap_or("Inbox");
 
-        self.send_command(Self::FOLDER_TAG, "SELECT", &[&into_literal(folder)])?;
-        let line = dbg!(self.read_until_tag(Self::FOLDER_TAG)?);
+        let responses =
+            self.send_command(Self::FOLDER_TAG, "SELECT", &[&into_literal(folder)])?;
+        let tagged_res = responses
+            .last()
+            .expect("responses is always at least one long");
 
-        if !line.to_lowercase().starts_with(&[Self::FOLDER_TAG, "ok"].join(" ")) {
+        if !tagged_res
+            .to_lowercase()
+            .starts_with(&[Self::FOLDER_TAG, "ok"].join(" "))
+        {
             return Err(Error::LoginFailed);
         }
 
@@ -86,17 +122,31 @@ impl Client {
         };
         let n = n.as_str();
 
-        self.send_command(Self::RETRIEVE_TAG, "FETCH", &[n, "BODY.PEEK[]"])?;
-        let line = dbg!(self.read_until_tag(&["*", n, "FETCH"].join(" "))?);
+        let responses =
+            self.send_command(Self::RETRIEVE_TAG, "FETCH", &[n, "BODY.PEEK[]"])?;
+        let tagged_res = responses
+            .last()
+            .expect("responses is always at least one long");
 
-        let start = line.find("{").expect("Line should always have number of octets");
-        let end = line.find("}").expect("Line should always have number of octets");
-        let to_read = line[start+1..end].parse::<usize>().unwrap();
-        dbg!(to_read);
+        if !tagged_res
+            .to_lowercase()
+            .starts_with(&[Self::RETRIEVE_TAG, "ok"].join(" "))
+        {
+            return Err(Error::MessageNotFound);
+        }
 
-        let mut buf = vec![b'\0'; to_read];
-        self.reader.read_exact(&mut buf)?;
-        print!("{}", String::from_utf8(buf).unwrap());
+        // Get message
+        let message = responses.first().expect("at least two responses expected");
+        let start = message
+            .find("{")
+            .expect("Line should always have number of octets");
+        let end = message
+            .find("}")
+            .expect("Line should always have number of octets");
+        let to_read = message[start + 1..end].parse::<usize>().unwrap();
+        let mes = &message[end + 3..end + 3 + to_read];
+
+        print!("{}", mes);
 
         Ok(())
     }
