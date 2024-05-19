@@ -32,7 +32,12 @@ fn main() -> ExitCode {
                 return ExitCode::from(3);
             }
         }
-        Command::Parse => todo!(),
+        Command::Parse => {
+            if client.parse(args.message_num).is_err() {
+                println!("Message not found");
+                return ExitCode::from(3);
+            }
+        }
         Command::Mime => todo!(),
         Command::List => todo!(),
     };

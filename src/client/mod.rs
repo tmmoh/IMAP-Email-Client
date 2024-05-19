@@ -1,5 +1,6 @@
 mod error;
 
+use std::fmt::Display;
 use std::io::prelude::*;
 use std::{
     io::{BufReader, BufWriter},
@@ -11,12 +12,62 @@ pub use self::error::{Error, Result};
 pub struct Client {
     pub reader: BufReader<TcpStream>,
     writer: BufWriter<TcpStream>,
+    // TODO: make private
+}
+
+#[derive(Default)]
+struct Header {
+    from: String,
+    to: Option<String>,
+    date: String,
+    subject: Option<String>,
+}
+
+impl Display for Header {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "From: {}\nTo:{}\nDate: {}\nSubject: {}\n",
+            self.from,
+            match self.to.as_ref() {
+                Some(to) => " ".to_owned() + to,
+                None => "".to_owned(),
+            },
+            self.date,
+            self.subject.as_ref().unwrap_or(&"<No subject>".to_string())
+        )
+    }
+}
+
+impl TryFrom<String> for Header {
+    type Error = Error;
+
+    fn try_from(value: String) -> std::prelude::v1::Result<Self, Self::Error> {
+        let fields = value.trim().split("\r\n");
+
+        let mut header: Self = Default::default();
+
+        for field in fields {
+            let (name, data) = dbg!(dbg!(field).split_once(": ").ok_or(Error::MalformedHeader)?);
+            let data = data.to_owned();
+            match name.to_lowercase().trim() {
+                "from" => { header.from = data; },
+                "to" => { header.to.insert(data); },
+                "date" => { header.date = data; },
+                "subject" => { header.subject.insert(data); },
+                _ => return Err(Error::MalformedHeader)
+            };
+        };
+
+        Ok(header)
+    }
 }
 
 impl Client {
     const LOGIN_TAG: &'static str = "logtag";
     const FOLDER_TAG: &'static str = "ftag";
     const RETRIEVE_TAG: &'static str = "rtag";
+    const PARSE_TAG: &'static str = "ptag";
 
     pub fn connect(server_name: &str) -> Result<Self> {
         let stream = TcpStream::connect((server_name, 143))?;
@@ -80,7 +131,7 @@ impl Client {
         let responses = self.send_command(
             Self::LOGIN_TAG,
             "LOGIN",
-            &[&into_literal(username), &into_literal(password)]
+            &[&into_literal(username), &into_literal(password)],
         )?;
         let tagged_res = responses
             .last()
@@ -99,8 +150,7 @@ impl Client {
     pub fn open_folder(&mut self, folder: Option<&str>) -> Result<()> {
         let folder = folder.unwrap_or("Inbox");
 
-        let responses =
-            self.send_command(Self::FOLDER_TAG, "SELECT", &[&into_literal(folder)])?;
+        let responses = self.send_command(Self::FOLDER_TAG, "SELECT", &[&into_literal(folder)])?;
         let tagged_res = responses
             .last()
             .expect("responses is always at least one long");
@@ -122,8 +172,7 @@ impl Client {
         };
         let n = n.as_str();
 
-        let responses =
-            self.send_command(Self::RETRIEVE_TAG, "FETCH", &[n, "BODY.PEEK[]"])?;
+        let responses = self.send_command(Self::RETRIEVE_TAG, "FETCH", &[n, "BODY.PEEK[]"])?;
         let tagged_res = responses
             .last()
             .expect("responses is always at least one long");
@@ -147,6 +196,45 @@ impl Client {
         let mes = &message[end + 3..end + 3 + to_read];
 
         print!("{}", mes);
+
+        Ok(())
+    }
+
+    pub fn parse(&mut self, message_num: Option<u32>) -> Result<()> {
+        let n = match message_num {
+            Some(n) => n.to_string(),
+            None => "*".to_string(),
+        };
+        let n = n.as_str();
+
+        let responses = self.send_command(
+            "parse_tag",
+            "FETCH",
+            &[n, "BODY.PEEK[HEADER.FIELDS (FROM TO DATE SUBJECT)]"],
+        )?;
+        let tagged_res = responses
+            .last()
+            .expect("responses is always at least one long");
+
+        if !tagged_res
+            .to_lowercase()
+            .starts_with(&["parse_tag", "ok"].join(" "))
+        {
+            return Err(Error::MessageNotFound);
+        }
+
+        dbg!(responses.first().unwrap().trim());
+
+        let header = responses.first().unwrap();
+        let header = header.split_once("}\r\n").unwrap().1;
+
+        // Unfold header
+        let header = header.replace("\r\n ", " ");
+
+
+        let header = Header::try_from(header)?;
+
+        print!("{}", header);
 
         Ok(())
     }

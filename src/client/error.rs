@@ -8,6 +8,7 @@ pub enum Error {
     MissingWrite,
     LoginFailed,
     MessageNotFound,
+    MalformedHeader,
 }
 
 impl From<io::Error> for Error {
