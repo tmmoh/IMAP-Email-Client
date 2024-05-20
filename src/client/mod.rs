@@ -49,7 +49,7 @@ impl TryFrom<String> for Header {
         let mut header: Self = Default::default();
 
         for field in fields {
-            let (name, data) = dbg!(dbg!(field).split_once(": ").ok_or(Error::MalformedHeader)?);
+            let (name, data) = field.split_once(": ").ok_or(Error::MalformedHeader)?;
             let data = data.to_owned();
             match name.to_lowercase().trim() {
                 "from" => {
@@ -91,7 +91,7 @@ impl Client {
     }
 
     fn send_command(&mut self, tag: &str, command: &str, args: &[&str]) -> Result<Vec<String>> {
-        let message = dbg!([&[tag, command], args, &["\r\n"]].concat().join(" "));
+        let message = [&[tag, command], args, &["\r\n"]].concat().join(" ");
         let to_write = message.as_bytes();
         let written = self.writer.write(to_write)?;
 
@@ -126,7 +126,6 @@ impl Client {
                         .find('}')
                         .expect("Line should always have number of octets");
                     let to_read = res[start + 1..end].parse::<usize>().unwrap();
-                    dbg!(to_read);
 
                     let mut literal = vec![b'\0'; to_read];
                     self.reader.read_exact(&mut literal)?;
@@ -220,11 +219,11 @@ impl Client {
         };
         let n = n.as_str();
 
-        let responses = dbg!(self.send_command(
+        let responses = self.send_command(
             Self::PARSE_TAG,
             "FETCH",
             &[n, "BODY.PEEK[HEADER.FIELDS (FROM TO DATE SUBJECT)]"],
-        )?);
+        )?;
         let tagged_res = responses
             .last()
             .expect("responses is always at least one long");
@@ -236,9 +235,7 @@ impl Client {
             return Err(Error::MessageNotFound);
         }
 
-        dbg!(responses.first().unwrap().trim());
-
-        let header = responses.first().unwrap();
+        let header = responses.first().unwrap().trim();
         let header = header.split_once("}\r\n").unwrap().1;
 
         // Unfold header
@@ -252,11 +249,11 @@ impl Client {
     }
 
     pub fn list(&mut self) -> Result<()> {
-        let mut responses = dbg!(self.send_command(
+        let mut responses = self.send_command(
             Self::LIST_TAG,
             "FETCH",
             &["1:*", "BODY.PEEK[HEADER.FIELDS (SUBJECT)]"],
-        )?);
+        )?;
         let tagged_res = responses
             .pop()
             .expect("responses is always at least one long");
@@ -311,9 +308,7 @@ impl Client {
             return Err(Error::MessageNotFound);
         }
 
-        dbg!(responses.first().unwrap().trim());
-
-        let header = responses.first().unwrap();
+        let header = responses.first().unwrap().trim();
         let header = header.split_once("}\r\n").unwrap().1;
 
         // Unfold header
@@ -324,7 +319,6 @@ impl Client {
 
         if mime.contains("1.0").not() || content.contains("multipart/alternative; boundary=").not()
         {
-            dbg!((mime, content));
             return Err(Error::MimeHeaderMatchFail);
         }
 
@@ -360,7 +354,7 @@ impl Client {
             .min()
             .ok_or(Error::MimeMatchFail)?;
         let to_count = &res[0..=start];
-        let body_num = dbg!(to_count.split(")(")).count();
+        let body_num = to_count.split(")(").count();
 
         Ok(body_num)
     }
@@ -410,5 +404,5 @@ impl Client {
 }
 
 fn into_literal(str: &str) -> String {
-    dbg!(format!("{{{}}}\r\n{}", str.len(), str))
+    format!("{{{}}}\r\n{}", str.len(), str)
 }
