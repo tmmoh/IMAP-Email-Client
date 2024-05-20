@@ -6,6 +6,7 @@ pub enum Error {
     TCPConnection(io::Error),
     MissingRead,
     MissingWrite,
+    InvalidBytes,
     LoginFailed,
     MessageNotFound,
     MalformedHeader,

@@ -9,7 +9,7 @@ pub mod client;
 
 fn main() -> ExitCode {
     let args: Args = match Args::try_from(env::args().collect::<Vec<String>>()) {
-        Ok(args) => args,
+        Ok(args) => dbg!(args),
         Err(_) => return ExitCode::from(1),
     };
 
