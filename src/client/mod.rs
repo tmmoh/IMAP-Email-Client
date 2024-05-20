@@ -207,7 +207,7 @@ impl Client {
         let to_read = message[start + 1..end].parse::<usize>().unwrap();
         let mes = &message[end + 3..end + 3 + to_read];
 
-        print!("{}", mes);
+        print!("{}", mes.trim_end_matches('\r'));
 
         Ok(())
     }
