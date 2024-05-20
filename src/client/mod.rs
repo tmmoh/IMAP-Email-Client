@@ -239,7 +239,7 @@ impl Client {
         let header = header.split_once("}\r\n").unwrap().1;
 
         // Unfold header
-        let header = header.replace("\r\n ", " ");
+        let header = header.replace("\r\n ", " ").replace("\r\n\t", "\t");
 
         let header = Header::try_from(header)?;
 
@@ -269,7 +269,7 @@ impl Client {
             .iter()
             .map(|res| -> Result<Option<String>> {
                 let res = res.split_once("}\r\n").ok_or(Error::MalformedHeader)?.1;
-                let res = res.replace("\r\n ", " ");
+                let res = res.replace("\r\n ", " ").replace("\r\n\t", "\t");
                 let subject = res.trim().split_once(": ").map(|(_, data)| data.to_string());
 
                 Ok(subject)
