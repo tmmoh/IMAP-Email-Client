@@ -41,7 +41,12 @@ fn main() -> ExitCode {
                 return ExitCode::from(3);
             }
         }
-        Command::Mime => todo!(),
+        Command::Mime => {
+            if client.mime(args.message_num).is_err() {
+                println!("Message not found");
+                return ExitCode::from(3);
+            }
+        },
         Command::List => {
             if client.list().is_err() {
                 return ExitCode::from(0);

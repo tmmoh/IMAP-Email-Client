@@ -288,6 +288,40 @@ impl Client {
 
         Ok(())
     }
+    pub fn mime(&mut self, message_num: Option<u32>) -> Result<()> {
+        let n = match message_num {
+            Some(n) => n.to_string(),
+            None => "*".to_string(),
+        };
+        let n = n.as_str();
+
+        let responses = self.send_command(Self::RETRIEVE_TAG, "FETCH", &[n, "BODY.PEEK[1]"])?;
+        let tagged_res = responses
+            .last()
+            .expect("responses is always at least one long");
+
+        if !tagged_res
+            .to_lowercase()
+            .starts_with(&[Self::RETRIEVE_TAG, "ok"].join(" "))
+        {
+            return Err(Error::MessageNotFound);
+        }
+
+        // Get message
+        let message = responses.first().expect("at least two responses expected");
+        let start = message
+            .find('{')
+            .expect("Line should always have number of octets");
+        let end = message
+            .find('}')
+            .expect("Line should always have number of octets");
+        let to_read = message[start + 1..end].parse::<usize>().unwrap();
+        let mes = &message[end + 3..end + 3 + to_read];
+
+        print!("{}", mes);
+
+        Ok(())
+    }
 }
 
 fn into_literal(str: &str) -> String {
