@@ -2,6 +2,7 @@ mod error;
 
 use std::fmt::Display;
 use std::io::prelude::*;
+use std::ops::Not;
 use std::{
     io::{BufReader, BufWriter},
     net::TcpStream,
@@ -51,13 +52,21 @@ impl TryFrom<String> for Header {
             let (name, data) = dbg!(dbg!(field).split_once(": ").ok_or(Error::MalformedHeader)?);
             let data = data.to_owned();
             match name.to_lowercase().trim() {
-                "from" => { header.from = data; },
-                "to" => { header.to.insert(data); },
-                "date" => { header.date = data; },
-                "subject" => { header.subject.insert(data); },
-                _ => return Err(Error::MalformedHeader)
+                "from" => {
+                    header.from = data;
+                }
+                "to" => {
+                    header.to.insert(data);
+                }
+                "date" => {
+                    header.date = data;
+                }
+                "subject" => {
+                    header.subject.insert(data);
+                }
+                _ => return Err(Error::MalformedHeader),
             };
-        };
+        }
 
         Ok(header)
     }
@@ -68,6 +77,7 @@ impl Client {
     const FOLDER_TAG: &'static str = "ftag";
     const RETRIEVE_TAG: &'static str = "rtag";
     const PARSE_TAG: &'static str = "ptag";
+    const LIST_TAG: &'static str = "ltag";
 
     pub fn connect(server_name: &str) -> Result<Self> {
         let stream = TcpStream::connect((server_name, 143))?;
@@ -207,11 +217,11 @@ impl Client {
         };
         let n = n.as_str();
 
-        let responses = self.send_command(
+        let responses = dbg!(self.send_command(
             "parse_tag",
             "FETCH",
             &[n, "BODY.PEEK[HEADER.FIELDS (FROM TO DATE SUBJECT)]"],
-        )?;
+        )?);
         let tagged_res = responses
             .last()
             .expect("responses is always at least one long");
@@ -231,10 +241,48 @@ impl Client {
         // Unfold header
         let header = header.replace("\r\n ", " ");
 
-
         let header = Header::try_from(header)?;
 
         print!("{}", header);
+
+        Ok(())
+    }
+
+    pub fn list(&mut self) -> Result<()> {
+        let mut responses = dbg!(self.send_command(
+            Self::LIST_TAG,
+            "FETCH",
+            &["1:*", "BODY.PEEK[HEADER.FIELDS (SUBJECT)]"],
+        )?);
+        let tagged_res = responses
+            .pop()
+            .expect("responses is always at least one long");
+
+        if !tagged_res
+            .to_lowercase()
+            .starts_with(&[Self::LIST_TAG, "ok"].join(" "))
+        {
+            return Err(Error::MessageNotFound);
+        }
+
+        responses
+            .iter()
+            .map(|res| -> Result<Option<String>> {
+                let res = res.split_once("}\r\n").ok_or(Error::MalformedHeader)?.1;
+                let res = res.replace("\r\n ", " ");
+                let subject = res.trim().split_once(": ").map(|(_, data)| data.to_string());
+
+                Ok(subject)
+            })
+            .enumerate()
+            .try_for_each(|(k, v)| -> Result<()> {
+                println!(
+                    "{}: {}",
+                    k + 1,
+                    v?.unwrap_or("<No subject>".to_string()).trim()
+                );
+                Ok(())
+            })?;
 
         Ok(())
     }

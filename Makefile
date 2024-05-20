@@ -12,3 +12,7 @@ vendor:
 
 format:
 	clang-format -style=file -i *.c
+
+clean:
+	cargo clean
+	rm -f $(EXE)

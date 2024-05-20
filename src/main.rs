@@ -39,7 +39,11 @@ fn main() -> ExitCode {
             }
         }
         Command::Mime => todo!(),
-        Command::List => todo!(),
+        Command::List => {
+            if client.list().is_err() {
+                return ExitCode::from(0);
+            }
+        },
     };
 
     ExitCode::from(0)
