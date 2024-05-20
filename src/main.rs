@@ -8,7 +8,10 @@ pub mod cli_args;
 pub mod client;
 
 fn main() -> ExitCode {
-    let args = dbg!(Args::try_from(env::args().collect::<Vec<String>>()).expect("invalid args"));
+    let args: Args = match Args::try_from(env::args().collect::<Vec<String>>()) {
+        Ok(args) => args,
+        Err(_) => return ExitCode::from(1),
+    };
 
     let mut client = match Client::connect(&args.server_name) {
         Ok(client) => client,
