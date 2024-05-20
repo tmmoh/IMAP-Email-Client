@@ -2,7 +2,6 @@ mod error;
 
 use std::fmt::Display;
 use std::io::prelude::*;
-use std::ops::Not;
 use std::{
     io::{BufReader, BufWriter},
     net::TcpStream,
@@ -56,13 +55,13 @@ impl TryFrom<String> for Header {
                     header.from = data;
                 }
                 "to" => {
-                    header.to.insert(data);
+                    header.to = Some(data);
                 }
                 "date" => {
                     header.date = data;
                 }
                 "subject" => {
-                    header.subject.insert(data);
+                    header.subject = Some(data);
                 }
                 _ => return Err(Error::MalformedHeader),
             };
@@ -108,19 +107,19 @@ impl Client {
             res.clear();
             let read = self.reader.read_line(&mut res)?;
             // Check missing read
-            if read != res.len() {
+            if read != res.len() || read == 0 {
                 return Err(Error::MissingRead);
             }
 
             // Check untagged lines
-            if res.starts_with("*") {
+            if res.starts_with('*') {
                 if res.contains("}\r\n") {
                     // Check for literal
                     let start = res
-                        .find("{")
+                        .find('{')
                         .expect("Line should always have number of octets");
                     let end = res
-                        .find("}")
+                        .find('}')
                         .expect("Line should always have number of octets");
                     let to_read = res[start + 1..end].parse::<usize>().unwrap();
                     dbg!(to_read);
@@ -197,10 +196,10 @@ impl Client {
         // Get message
         let message = responses.first().expect("at least two responses expected");
         let start = message
-            .find("{")
+            .find('{')
             .expect("Line should always have number of octets");
         let end = message
-            .find("}")
+            .find('}')
             .expect("Line should always have number of octets");
         let to_read = message[start + 1..end].parse::<usize>().unwrap();
         let mes = &message[end + 3..end + 3 + to_read];
@@ -218,7 +217,7 @@ impl Client {
         let n = n.as_str();
 
         let responses = dbg!(self.send_command(
-            "parse_tag",
+            Self::PARSE_TAG,
             "FETCH",
             &[n, "BODY.PEEK[HEADER.FIELDS (FROM TO DATE SUBJECT)]"],
         )?);
@@ -228,7 +227,7 @@ impl Client {
 
         if !tagged_res
             .to_lowercase()
-            .starts_with(&["parse_tag", "ok"].join(" "))
+            .starts_with(&[Self::PARSE_TAG, "ok"].join(" "))
         {
             return Err(Error::MessageNotFound);
         }
@@ -270,7 +269,10 @@ impl Client {
             .map(|res| -> Result<Option<String>> {
                 let res = res.split_once("}\r\n").ok_or(Error::MalformedHeader)?.1;
                 let res = res.replace("\r\n ", " ").replace("\r\n\t", "\t");
-                let subject = res.trim().split_once(": ").map(|(_, data)| data.to_string());
+                let subject = res
+                    .trim()
+                    .split_once(": ")
+                    .map(|(_, data)| data.to_string());
 
                 Ok(subject)
             })
