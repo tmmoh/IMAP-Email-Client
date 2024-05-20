@@ -9,6 +9,8 @@ pub enum Error {
     LoginFailed,
     MessageNotFound,
     MalformedHeader,
+    MimeMatchFail,
+    MimeHeaderMatchFail,
 }
 
 impl From<io::Error> for Error {

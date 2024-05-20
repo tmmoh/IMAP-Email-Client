@@ -2,6 +2,7 @@ mod error;
 
 use std::fmt::Display;
 use std::io::prelude::*;
+use std::ops::Not;
 use std::{
     io::{BufReader, BufWriter},
     net::TcpStream,
@@ -77,6 +78,9 @@ impl Client {
     const RETRIEVE_TAG: &'static str = "rtag";
     const PARSE_TAG: &'static str = "ptag";
     const LIST_TAG: &'static str = "ltag";
+    const MIME_TAG: &'static str = "mtag";
+    const MIME_HEADER_VERIFY_TAG: &'static str = "mhvtag";
+    const MIME_BODY_VERIFY_TAG: &'static str = "mbvtag";
 
     pub fn connect(server_name: &str) -> Result<Self> {
         let stream = TcpStream::connect((server_name, 143))?;
@@ -126,7 +130,7 @@ impl Client {
 
                     let mut literal = vec![b'\0'; to_read];
                     self.reader.read_exact(&mut literal)?;
-                    res.push_str(std::str::from_utf8(&literal).expect("should be valid utf-8"));
+                    res.push_str(std::str::from_utf8(dbg!(&literal)).expect("should be valid utf-8"));
                 }
                 responses.push(res.clone());
             } else if res.starts_with(tag) {
@@ -288,6 +292,79 @@ impl Client {
 
         Ok(())
     }
+
+    fn verify_mime_header(&mut self, n: &str) -> Result<()> {
+        let responses = self.send_command(
+            Self::MIME_HEADER_VERIFY_TAG,
+            "FETCH",
+            &[n, "BODY.PEEK[HEADER.FIELDS (MIME-Version Content-type)]"],
+        )?;
+
+        let tagged_res = responses
+            .last()
+            .expect("responses is always at least one long");
+
+        if !tagged_res
+            .to_lowercase()
+            .starts_with(&[Self::MIME_HEADER_VERIFY_TAG, "ok"].join(" "))
+        {
+            return Err(Error::MessageNotFound);
+        }
+
+        dbg!(responses.first().unwrap().trim());
+
+        let header = responses.first().unwrap();
+        let header = header.split_once("}\r\n").unwrap().1;
+
+        // Unfold header
+        let header = header.replace("\r\n ", " ").replace("\r\n\t", "\t");
+
+        // Split
+        let (mime, content) = header.split_once("\r\n").ok_or(Error::MalformedHeader)?;
+
+        if mime.contains("1.0").not() || content.contains("multipart/alternative; boundary=").not()
+        {
+            dbg!((mime, content));
+            return Err(Error::MimeHeaderMatchFail);
+        }
+
+        Ok(())
+    }
+
+    fn find_first_plain(&mut self, n: &str) -> Result<usize> {
+        let responses =
+            self.send_command(Self::MIME_BODY_VERIFY_TAG, "FETCH", &[n, "BODYSTRUCTURE"])?;
+
+        let tagged_res = responses
+            .last()
+            .expect("responses is always at least one long");
+
+        if !tagged_res
+            .to_lowercase()
+            .starts_with(&[Self::MIME_BODY_VERIFY_TAG, "ok"].join(" "))
+        {
+            return Err(Error::MessageNotFound);
+        }
+
+        let res = responses.first().expect("at least two responses expected");
+
+        let mut start: [Option<usize>; 3] = Default::default();
+        start[0] =
+            res.find("(\"text\" \"plain\" (\"charset\" \"UTF-8\") NIL NIL \"quoted-printable\"");
+        start[1] = res.find("(\"text\" \"plain\" (\"charset\" \"UTF-8\") NIL NIL \"7bit\"");
+        start[2] = res.find("(\"text\" \"plain\" (\"charset\" \"UTF-8\") NIL NIL \"8bit\"");
+
+        let start = start
+            .iter()
+            .filter_map(|n| *n)
+            .min()
+            .ok_or(Error::MimeMatchFail)?;
+        let to_count = &res[0..=start];
+        let body_num = dbg!(to_count.split(")(")).count();
+
+        Ok(body_num)
+    }
+
     pub fn mime(&mut self, message_num: Option<u32>) -> Result<()> {
         let n = match message_num {
             Some(n) => n.to_string(),
@@ -295,14 +372,22 @@ impl Client {
         };
         let n = n.as_str();
 
-        let responses = self.send_command(Self::RETRIEVE_TAG, "FETCH", &[n, "BODY.PEEK[1]"])?;
+        self.verify_mime_header(n)?;
+        let body_num = self.find_first_plain(n)?;
+
+        let responses = self.send_command(
+            Self::MIME_TAG,
+            "FETCH",
+            &[n, format!("BODY.PEEK[{body_num}]").as_str()],
+        )?;
+
         let tagged_res = responses
             .last()
             .expect("responses is always at least one long");
 
         if !tagged_res
             .to_lowercase()
-            .starts_with(&[Self::RETRIEVE_TAG, "ok"].join(" "))
+            .starts_with(&[Self::MIME_TAG, "ok"].join(" "))
         {
             return Err(Error::MessageNotFound);
         }
