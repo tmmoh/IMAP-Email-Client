@@ -130,7 +130,7 @@ impl Client {
 
                     let mut literal = vec![b'\0'; to_read];
                     self.reader.read_exact(&mut literal)?;
-                    res.push_str(std::str::from_utf8(&literal).map_err(|_| Error::InvalidBytes)?);
+                    res.push_str(&String::from_utf8_lossy(&literal));
                 }
                 responses.push(res.clone());
             } else if res.starts_with(tag) {
