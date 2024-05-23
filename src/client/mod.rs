@@ -1,7 +1,7 @@
 mod error;
 
 use std::fmt::Display;
-use std::io::prelude::*;
+use std::io::{prelude::*, stdout};
 use std::ops::Not;
 use std::{
     io::{BufReader, BufWriter},
@@ -90,7 +90,7 @@ impl Client {
         })
     }
 
-    fn send_command(&mut self, tag: &str, command: &str, args: &[&str]) -> Result<Vec<String>> {
+    fn send_command(&mut self, tag: &str, command: &str, args: &[&str]) -> Result<Vec<Vec<u8>>> {
         let message = [&[tag, command], args, &["\r\n"]].concat().join(" ");
         let to_write = message.as_bytes();
         let written = self.writer.write(to_write)?;
@@ -104,54 +104,56 @@ impl Client {
         self.read_until_tag(tag)
     }
 
-    fn read_until_tag(&mut self, tag: &str) -> Result<Vec<String>> {
-        let mut responses: Vec<String> = Vec::new();
-        let mut res = String::new();
+    fn read_until_tag(&mut self, tag: &str) -> Result<Vec<Vec<u8>>> {
+        let mut responses: Vec<Vec<u8>> = Vec::new();
+        let mut res: Vec<u8> = Vec::new();
         loop {
             res.clear();
-            let read = self.reader.read_line(&mut res)?;
+            let read = self.reader.read_until(b'\n', &mut res)?;
             // Check missing read
             if read != res.len() || read == 0 {
                 return Err(Error::MissingRead);
             }
 
             // Check untagged lines
-            if res.starts_with('*') {
-                if res.contains("}\r\n") {
+            if res.starts_with(&[b'*']) {
+                if res.contains(&b'{') && res.windows(3).any(|b| b == [b'}', b'\r', b'\n']) {
                     // Check for literal
                     let start = res
-                        .find('{')
+                        .iter()
+                        .position(|&c| c == b'{')
                         .expect("Line should always have number of octets");
                     let end = res
-                        .find('}')
+                        .iter()
+                        .position(|&c| c == b'}')
                         .expect("Line should always have number of octets");
-                    let to_read = res[start + 1..end].parse::<usize>().unwrap();
+                    let to_read = std::str::from_utf8(&res[start + 1..end])
+                        .unwrap()
+                        .parse::<usize>()
+                        .unwrap();
 
                     let mut literal = vec![b'\0'; to_read];
                     self.reader.read_exact(&mut literal)?;
-                    res.push_str(&String::from_utf8_lossy(&literal));
+                    res.append(&mut literal);
                 }
                 responses.push(res.clone());
-            } else if res.starts_with(tag) {
+            } else if res.starts_with(tag.as_bytes()) {
                 responses.push(res);
                 return Ok(responses);
             }
         }
     }
 
-    pub fn login(&mut self, username: &str, password: &str) -> Result<()> {
-        let responses = self.send_command(
-            Self::LOGIN_TAG,
-            "LOGIN",
-            &[&into_literal(username), &into_literal(password)],
-        )?;
+    fn check_command_success(&self, tag: &str, responses: &Vec<Vec<u8>>) -> Result<()> {
         let tagged_res = responses
             .last()
             .expect("responses is always at least one long");
 
         if !tagged_res
-            .to_lowercase()
-            .starts_with(&[Self::LOGIN_TAG, "ok"].join(" "))
+            .iter()
+            .map(|&c| c.to_ascii_lowercase())
+            .collect::<Vec<_>>()
+            .starts_with(&[tag, "ok"].join(" ").into_bytes())
         {
             return Err(Error::LoginFailed);
         }
@@ -159,22 +161,23 @@ impl Client {
         Ok(())
     }
 
+    pub fn login(&mut self, username: &str, password: &str) -> Result<()> {
+        let responses = self.send_command(
+            Self::LOGIN_TAG,
+            "LOGIN",
+            &[&into_quoted(username), &into_quoted(password)],
+        )?;
+
+        self.check_command_success(Self::LOGIN_TAG, &responses)
+    }
+
     pub fn open_folder(&mut self, folder: Option<&str>) -> Result<()> {
         let folder = folder.unwrap_or("Inbox");
 
-        let responses = self.send_command(Self::FOLDER_TAG, "SELECT", &[&into_literal(folder)])?;
-        let tagged_res = responses
-            .last()
-            .expect("responses is always at least one long");
+        let responses =
+            self.send_command(Self::FOLDER_TAG, "SELECT", &[&into_quoted(folder)])?;
 
-        if !tagged_res
-            .to_lowercase()
-            .starts_with(&[Self::FOLDER_TAG, "ok"].join(" "))
-        {
-            return Err(Error::LoginFailed);
-        }
-
-        Ok(())
+        self.check_command_success(Self::FOLDER_TAG, &responses)
     }
 
     pub fn retrieve(&mut self, message_num: Option<u32>) -> Result<()> {
@@ -185,29 +188,30 @@ impl Client {
         let n = n.as_str();
 
         let responses = self.send_command(Self::RETRIEVE_TAG, "FETCH", &[n, "BODY.PEEK[]"])?;
-        let tagged_res = responses
-            .last()
-            .expect("responses is always at least one long");
 
-        if !tagged_res
-            .to_lowercase()
-            .starts_with(&[Self::RETRIEVE_TAG, "ok"].join(" "))
-        {
-            return Err(Error::MessageNotFound);
-        }
+        self.check_command_success(Self::RETRIEVE_TAG, &responses)?;
 
         // Get message
         let message = responses.first().expect("at least two responses expected");
         let start = message
-            .find('{')
+            .iter()
+            .position(|&c| c == b'{')
             .expect("Line should always have number of octets");
         let end = message
-            .find('}')
+            .iter()
+            .position(|&c| c == b'}')
             .expect("Line should always have number of octets");
-        let to_read = message[start + 1..end].parse::<usize>().unwrap();
-        let mes = &message[end + 3..end + 3 + to_read];
+        let to_read = String::from_utf8_lossy(&message[start + 1..end])
+            .parse::<usize>()
+            .unwrap();
+        let mes = message
+            .iter()
+            .take(end + 3 + to_read)
+            .skip(end + 3)
+            .map(|&c| c as u8)
+            .collect::<Vec<u8>>();
 
-        print!("{}", mes.trim_end_matches('\r'));
+        std::io::stdout().write_all(&mes)?;
 
         Ok(())
     }
@@ -224,18 +228,11 @@ impl Client {
             "FETCH",
             &[n, "BODY.PEEK[HEADER.FIELDS (FROM TO DATE SUBJECT)]"],
         )?;
-        let tagged_res = responses
-            .last()
-            .expect("responses is always at least one long");
 
-        if !tagged_res
-            .to_lowercase()
-            .starts_with(&[Self::PARSE_TAG, "ok"].join(" "))
-        {
-            return Err(Error::MessageNotFound);
-        }
+        self.check_command_success(Self::PARSE_TAG, &responses)?;
 
-        let header = responses.first().unwrap().trim();
+        let header = String::from_utf8_lossy(responses.first().unwrap());
+        let header = header.trim();
         let header = header.split_once("}\r\n").unwrap().1;
 
         // Unfold header
@@ -249,25 +246,18 @@ impl Client {
     }
 
     pub fn list(&mut self) -> Result<()> {
-        let mut responses = self.send_command(
+        let responses = self.send_command(
             Self::LIST_TAG,
             "FETCH",
             &["1:*", "BODY.PEEK[HEADER.FIELDS (SUBJECT)]"],
         )?;
-        let tagged_res = responses
-            .pop()
-            .expect("responses is always at least one long");
 
-        if !tagged_res
-            .to_lowercase()
-            .starts_with(&[Self::LIST_TAG, "ok"].join(" "))
-        {
-            return Err(Error::MessageNotFound);
-        }
+        self.check_command_success(Self::LIST_TAG, &responses)?;
 
         responses
             .iter()
             .map(|res| -> Result<Option<String>> {
+                let res = String::from_utf8_lossy(res);
                 let res = res.split_once("}\r\n").ok_or(Error::MalformedHeader)?.1;
                 let res = res.replace("\r\n ", " ").replace("\r\n\t", "\t");
                 let subject = res
@@ -297,18 +287,10 @@ impl Client {
             &[n, "BODY.PEEK[HEADER.FIELDS (MIME-Version Content-type)]"],
         )?;
 
-        let tagged_res = responses
-            .last()
-            .expect("responses is always at least one long");
+        self.check_command_success(Self::MIME_HEADER_VERIFY_TAG, &responses)?;
 
-        if !tagged_res
-            .to_lowercase()
-            .starts_with(&[Self::MIME_HEADER_VERIFY_TAG, "ok"].join(" "))
-        {
-            return Err(Error::MessageNotFound);
-        }
-
-        let header = responses.first().unwrap().trim();
+        let header = String::from_utf8_lossy(responses.first().unwrap());
+        let header = header.trim();
         let header = header.split_once("}\r\n").unwrap().1;
 
         // Unfold header
@@ -329,18 +311,10 @@ impl Client {
         let responses =
             self.send_command(Self::MIME_BODY_VERIFY_TAG, "FETCH", &[n, "BODYSTRUCTURE"])?;
 
-        let tagged_res = responses
-            .last()
-            .expect("responses is always at least one long");
+        self.check_command_success(Self::MIME_BODY_VERIFY_TAG, &responses)?;
 
-        if !tagged_res
-            .to_lowercase()
-            .starts_with(&[Self::MIME_BODY_VERIFY_TAG, "ok"].join(" "))
-        {
-            return Err(Error::MessageNotFound);
-        }
-
-        let res = responses.first().expect("at least two responses expected");
+        let res =
+            String::from_utf8_lossy(responses.first().expect("at least two responses expected"));
 
         let mut start: [Option<usize>; 3] = Default::default();
         start[0] =
@@ -375,34 +349,31 @@ impl Client {
             &[n, format!("BODY.PEEK[{body_num}]").as_str()],
         )?;
 
-        let tagged_res = responses
-            .last()
-            .expect("responses is always at least one long");
-
-        if !tagged_res
-            .to_lowercase()
-            .starts_with(&[Self::MIME_TAG, "ok"].join(" "))
-        {
-            return Err(Error::MessageNotFound);
-        }
+        self.check_command_success(Self::MIME_TAG, &responses)?;
 
         // Get message
         let message = responses.first().expect("at least two responses expected");
         let start = message
-            .find('{')
+            .iter()
+            .position(|&c| c == b'{')
             .expect("Line should always have number of octets");
         let end = message
-            .find('}')
+            .iter()
+            .position(|&c| c == b'}')
             .expect("Line should always have number of octets");
-        let to_read = message[start + 1..end].parse::<usize>().unwrap();
+        let to_read = String::from_utf8_lossy(&message[start + 1..end])
+            .parse::<usize>()
+            .unwrap();
         let mes = &message[end + 3..end + 3 + to_read];
 
-        print!("{}", mes);
+        stdout().write_all(mes)?;
 
         Ok(())
     }
 }
 
-fn into_literal(str: &str) -> String {
-    format!("{{{}}}\r\n{}", str.len(), str)
+fn into_quoted(str: &str) -> String {
+    let quoted = str.replace(r#"\"#, r#"\\"#);
+    let quoted = quoted.replace(r#"""#, r#"\""#);
+    format!(r#""{}""#, quoted)
 }
