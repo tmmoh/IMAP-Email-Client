@@ -1,5 +1,6 @@
 mod error;
 
+use std::convert::Infallible;
 use std::fmt::Display;
 use std::io::{prelude::*, stdout};
 use std::ops::Not;
@@ -11,20 +12,19 @@ use std::{
 pub use self::error::{Error, Result};
 
 pub struct Client {
-    pub reader: BufReader<TcpStream>,
+    reader: BufReader<TcpStream>,
     writer: BufWriter<TcpStream>,
-    // TODO: make private
 }
 
 #[derive(Default)]
-struct Header {
+struct EnvelopeHeader {
     from: String,
     to: Option<String>,
     date: String,
     subject: Option<String>,
 }
 
-impl Display for Header {
+impl Display for EnvelopeHeader {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(
             f,
@@ -40,7 +40,7 @@ impl Display for Header {
     }
 }
 
-impl TryFrom<String> for Header {
+impl TryFrom<String> for EnvelopeHeader {
     type Error = Error;
 
     fn try_from(value: String) -> std::prelude::v1::Result<Self, Self::Error> {
@@ -104,34 +104,46 @@ impl Client {
         self.read_until_tag(tag)
     }
 
+    fn parse_literal_length(&self, bytes: &Vec<u8>) -> Result<(usize, usize)> {
+        let start = bytes
+            .iter()
+            .position(|&c| c == b'{')
+            .ok_or(Error::Infallible)?;
+
+        let end = bytes
+            .iter()
+            .position(|&c| c == b'}')
+            .ok_or(Error::Infallible)?;
+
+        let to_read = std::str::from_utf8(&bytes[start + 1..end])
+            .map_err(|_| Error::Infallible)?
+            .parse::<usize>()
+            .map_err(|_| Error::Infallible)?;
+
+        // Return the start index and length of the literal
+        Ok((end + 3, to_read))
+    }
+
     fn read_until_tag(&mut self, tag: &str) -> Result<Vec<Vec<u8>>> {
         let mut responses: Vec<Vec<u8>> = Vec::new();
         let mut res: Vec<u8> = Vec::new();
+
         loop {
+            // Read line by line
             res.clear();
             let read = self.reader.read_until(b'\n', &mut res)?;
-            // Check missing read
+
+            // Check missing reads or disconnect
             if read != res.len() || read == 0 {
                 return Err(Error::MissingRead);
             }
 
             // Check untagged lines
             if res.starts_with(&[b'*']) {
+                // Check if line contains literal indicator "{*}\r\n"
                 if res.contains(&b'{') && res.windows(3).any(|b| b == [b'}', b'\r', b'\n']) {
-                    // Check for literal
-                    let start = res
-                        .iter()
-                        .position(|&c| c == b'{')
-                        .expect("Line should always have number of octets");
-                    let end = res
-                        .iter()
-                        .position(|&c| c == b'}')
-                        .expect("Line should always have number of octets");
-                    let to_read = std::str::from_utf8(&res[start + 1..end])
-                        .unwrap()
-                        .parse::<usize>()
-                        .unwrap();
-
+                    // Get literal
+                    let (_, to_read) = self.parse_literal_length(&res)?;
                     let mut literal = vec![b'\0'; to_read];
                     self.reader.read_exact(&mut literal)?;
                     res.append(&mut literal);
@@ -145,9 +157,7 @@ impl Client {
     }
 
     fn check_command_success(&self, tag: &str, responses: &Vec<Vec<u8>>) -> Result<()> {
-        let tagged_res = responses
-            .last()
-            .expect("responses is always at least one long");
+        let tagged_res = responses.last().ok_or(Error::Infallible)?;
 
         if !tagged_res
             .iter()
@@ -155,7 +165,7 @@ impl Client {
             .collect::<Vec<_>>()
             .starts_with(&[tag, "ok"].join(" ").into_bytes())
         {
-            return Err(Error::LoginFailed);
+            return Err(Error::CommandFailed);
         }
 
         Ok(())
@@ -174,8 +184,7 @@ impl Client {
     pub fn open_folder(&mut self, folder: Option<&str>) -> Result<()> {
         let folder = folder.unwrap_or("Inbox");
 
-        let responses =
-            self.send_command(Self::FOLDER_TAG, "SELECT", &[&into_quoted(folder)])?;
+        let responses = self.send_command(Self::FOLDER_TAG, "SELECT", &[&into_quoted(folder)])?;
 
         self.check_command_success(Self::FOLDER_TAG, &responses)
     }
@@ -192,22 +201,13 @@ impl Client {
         self.check_command_success(Self::RETRIEVE_TAG, &responses)?;
 
         // Get message
-        let message = responses.first().expect("at least two responses expected");
-        let start = message
-            .iter()
-            .position(|&c| c == b'{')
-            .expect("Line should always have number of octets");
-        let end = message
-            .iter()
-            .position(|&c| c == b'}')
-            .expect("Line should always have number of octets");
-        let to_read = String::from_utf8_lossy(&message[start + 1..end])
-            .parse::<usize>()
-            .unwrap();
+        let message = responses.first().ok_or(Error::Infallible)?;
+
+        let (start, to_read) = self.parse_literal_length(message)?;
         let mes = message
             .iter()
-            .take(end + 3 + to_read)
-            .skip(end + 3)
+            .take(start + to_read)
+            .skip(start)
             .map(|&c| c as u8)
             .collect::<Vec<u8>>();
 
@@ -231,14 +231,16 @@ impl Client {
 
         self.check_command_success(Self::PARSE_TAG, &responses)?;
 
-        let header = String::from_utf8_lossy(responses.first().unwrap());
-        let header = header.trim();
-        let header = header.split_once("}\r\n").unwrap().1;
+        // Get header information
+        let header_string = String::from_utf8_lossy(responses.first().ok_or(Error::Infallible)?);
+
+        // Get literal part of response
+        let header_literal = header_string.trim().split_once("}\r\n").ok_or(Error::Infallible)?.1;
 
         // Unfold header
-        let header = header.replace("\r\n ", " ").replace("\r\n\t", "\t");
+        let header_literal = header_literal.replace("\r\n ", " ").replace("\r\n\t", "\t");
 
-        let header = Header::try_from(header)?;
+        let header = EnvelopeHeader::try_from(header_literal)?;
 
         print!("{}", header);
 
@@ -257,10 +259,21 @@ impl Client {
         responses
             .iter()
             .map(|res| -> Result<Option<String>> {
-                let res = String::from_utf8_lossy(res);
-                let res = res.split_once("}\r\n").ok_or(Error::MalformedHeader)?.1;
-                let res = res.replace("\r\n ", " ").replace("\r\n\t", "\t");
-                let subject = res
+                // Get response information
+                let res_string = String::from_utf8_lossy(res);
+
+                // Get literal part of response
+                let res_literal = res_string
+                    .trim()
+                    .split_once("}\r\n")
+                    .ok_or(Error::MalformedHeader)?
+                    .1;
+
+                // Unfold response
+                let res_literal = res_literal.replace("\r\n ", " ").replace("\r\n\t", "\t");
+
+                // Get subject if it exists, otherwise none
+                let subject = res_literal
                     .trim()
                     .split_once(": ")
                     .map(|(_, data)| data.to_string());
@@ -289,15 +302,23 @@ impl Client {
 
         self.check_command_success(Self::MIME_HEADER_VERIFY_TAG, &responses)?;
 
-        let header = String::from_utf8_lossy(responses.first().unwrap());
-        let header = header.trim();
-        let header = header.split_once("}\r\n").unwrap().1;
+        // Get response information
+        let header_string = String::from_utf8_lossy(responses.first().ok_or(Error::Infallible)?);
 
-        // Unfold header
-        let header = header.replace("\r\n ", " ").replace("\r\n\t", "\t");
+        // Get literal part of response
+        let header_literal = header_string
+            .trim()
+            .split_once("}\r\n")
+            .ok_or(Error::Infallible)?
+            .1;
 
-        // Split
-        let (mime, content) = header.split_once("\r\n").ok_or(Error::MalformedHeader)?;
+        // Unfold header literal
+        let header_literal = header_literal.replace("\r\n ", " ").replace("\r\n\t", "\t");
+
+        // Split into mime info and content info
+        let (mime, content) = header_literal
+            .split_once("\r\n")
+            .ok_or(Error::MalformedHeader)?;
 
         if mime.contains("1.0").not() || content.contains("multipart/alternative; boundary=").not()
         {
@@ -313,20 +334,24 @@ impl Client {
 
         self.check_command_success(Self::MIME_BODY_VERIFY_TAG, &responses)?;
 
-        let res =
-            String::from_utf8_lossy(responses.first().expect("at least two responses expected"));
+        let res = String::from_utf8_lossy(responses.first().ok_or(Error::Infallible)?);
 
         let mut start: [Option<usize>; 3] = Default::default();
+
+        // Find the first occurences of each valid type, if they exist
         start[0] =
             res.find("(\"text\" \"plain\" (\"charset\" \"UTF-8\") NIL NIL \"quoted-printable\"");
         start[1] = res.find("(\"text\" \"plain\" (\"charset\" \"UTF-8\") NIL NIL \"7bit\"");
         start[2] = res.find("(\"text\" \"plain\" (\"charset\" \"UTF-8\") NIL NIL \"8bit\"");
 
+        // Find the earliest occurence, if one exists
         let start = start
             .iter()
             .filter_map(|n| *n)
             .min()
             .ok_or(Error::MimeMatchFail)?;
+
+        // Get the body section number of existing occurence
         let to_count = &res[0..=start];
         let body_num = to_count.split(")(").count();
 
@@ -352,19 +377,9 @@ impl Client {
         self.check_command_success(Self::MIME_TAG, &responses)?;
 
         // Get message
-        let message = responses.first().expect("at least two responses expected");
-        let start = message
-            .iter()
-            .position(|&c| c == b'{')
-            .expect("Line should always have number of octets");
-        let end = message
-            .iter()
-            .position(|&c| c == b'}')
-            .expect("Line should always have number of octets");
-        let to_read = String::from_utf8_lossy(&message[start + 1..end])
-            .parse::<usize>()
-            .unwrap();
-        let mes = &message[end + 3..end + 3 + to_read];
+        let message = responses.first().ok_or(Error::Infallible)?;
+        let (start, to_read) = self.parse_literal_length(message)?;
+        let mes = &message[start..start + to_read];
 
         stdout().write_all(mes)?;
 

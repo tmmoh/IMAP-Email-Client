@@ -81,7 +81,4 @@ fn main() -> ExitCode {
     };
 
     ExitCode::from(0)
-
-    // TODO:
-    // Handle message continuation request
 }
