@@ -1,6 +1,5 @@
 mod error;
 
-use std::convert::Infallible;
 use std::fmt::Display;
 use std::io::{prelude::*, stdout};
 use std::ops::Not;
@@ -235,7 +234,11 @@ impl Client {
         let header_string = String::from_utf8_lossy(responses.first().ok_or(Error::Infallible)?);
 
         // Get literal part of response
-        let header_literal = header_string.trim().split_once("}\r\n").ok_or(Error::Infallible)?.1;
+        let header_literal = header_string
+            .trim()
+            .split_once("}\r\n")
+            .ok_or(Error::Infallible)?
+            .1;
 
         // Unfold header
         let header_literal = header_literal.replace("\r\n ", " ").replace("\r\n\t", "\t");
@@ -264,7 +267,6 @@ impl Client {
 
                 // Get literal part of response
                 let res_literal = res_string
-                    .trim()
                     .split_once("}\r\n")
                     .ok_or(Error::MalformedHeader)?
                     .1;
