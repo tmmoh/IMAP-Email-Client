@@ -91,7 +91,7 @@ impl Client {
     }
 
     fn send_command(&mut self, tag: &str, command: &str, args: &[&str]) -> Result<Vec<Vec<u8>>> {
-        let message = [&[tag, command], args, &["\r\n"]].concat().join(" ");
+        let message = dbg!([&[tag, command], args, &["\r\n"]].concat().join(" "));
         let to_write = message.as_bytes();
         let written = self.writer.write(to_write)?;
 
